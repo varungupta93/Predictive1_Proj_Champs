@@ -1,0 +1,22 @@
+---
+title: "Predictive1_Project_Part1"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+Reading in the data and separating into training and test sets.
+```{r}
+catalog <- read.csv("catalog sales data.csv", header = T)
+train <- catalog[catalog$train == 1,]
+test <- catalog[catalog$train == 0,]
+```
+
+
+```{r}
+multregtrain <- catalog[]
+```
+

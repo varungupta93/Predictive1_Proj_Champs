@@ -7,6 +7,30 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
+## Data Cleansing
+
+We took 2 main steps to clean the data:
+1) Delete ordhist
+2) Update the datelp6 year to match lpuryear where needed
+
+```{r}
+csd <- read_csv("~/MSiA/Fall 2017/MSiA_401/Project/catalog sales data.csv", 
+                col_types = cols(datead6 = col_date(format = "%m/%d/%Y"), 
+                                 datelp6 = col_date(format = "%m/%d/%Y")))
+
+#Drop ordhist
+csd <- subset(csd, select = -c(ordhist) )
+
+#Update daltelp6
+for (i in length(csd$datelp6)){
+  if(is.na(csd$lpuryear) == FALSE && substr(csd$datelp6[i],4,4) !=csd$lpuryear[i] ){
+    substr(csd$datelp6[i],4,4) <-csd$lpuryear[i]
+  }
+  i=i+1
+}
+```
+
+
 
 Reading in the data and separating into training and test sets.
 ```{r}

@@ -1,0 +1,109 @@
+---
+title: "csd_eda"
+author: "Jerry_Chen"
+date: "November 20, 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(dplyr)
+library(car)
+```
+
+## Preprocessing & Cleaning
+
+```{r}
+csd <- read_csv("catalog sales data.csv", col_types = cols(datead6 = col_date(format = "%m/%d/%Y"), datelp6 = col_date(format = "%m/%d/%Y")))
+
+#summary(csd)
+head(csd)
+```
+
+```{r}
+csd <- subset(csd, select = -c(ordhist) )
+```
+
+
+```{r}
+csd[is.na(csd$lpuryear) == FALSE & 
+      substr(csd$datelp6,4,4) < csd$lpuryear,] <- csd %>% 
+  filter(is.na(lpuryear) == FALSE & substr(datelp6,4,4) < lpuryear) %>%
+  mutate(datelp6 = as.Date(paste0(substr(datelp6,1,3), lpuryear, substr(datelp6,5,10))))
+
+csd
+```
+
+```{r}
+train <- csd[csd$train == 1,]
+test <- csd[csd$train == 0,]
+```
+
+```{r}
+train$targ_prob <- ifelse(train$targdol > 0, 1, 0)
+table(train$targ_prob)
+```
+
+## EDA
+
+select numerical features and check correlation
+```{r}
+train_num <- train %>% select(-datead6, -datelp6, -lpuryear, -train)
+cor(train_num)
+```
+
+###A few comments:
+  1. LTD (slshist) may be correlated with other sales, and also with fall order and spring order. (It is better to dropp slshist.)
+  2. sales are not highly correlated with each other. The same goes with orders.
+  3. the sales and order are highly correlated during the same period, e.g., slstyr with ordtyr, sls2ago with ord2ago.
+
+Regression of historical sales (LTD) onto other sales (this year, last year, two years, three years)
+```{r}
+sls_lm <- lm(slshist ~ slstyr+slslyr+sls2ago+sls3ago, data=train)
+summary(sls_lm)
+```
+
+sales are not highly correlated with each other, except with the historical sales.
+calculate the VIFs of the simple linear regression.
+```{r}
+vif(sls_lm)
+```
+
+Repeat this on order variables:
+```{r}
+ord_lm <- lm(falord ~ ordtyr+ordlyr+ord2ago+ord3ago, data=train)
+summary(ord_lm)
+```
+
+```{r}
+vif(ord_lm)
+```
+
+
+Try to use logistic regression (using order variables) to predict the probability of purchase.
+```{r}
+targ_prob_ord_log <- glm(targ_prob~ordtyr+ordlyr+ord2ago+ord3ago, data=train, family=binomial)
+summary(targ_prob_ord_log)
+```
+
+```{r}
+conf_ord <- table(train$targ_prob, targ_prob_ord_log$fitted.values > 0.5)
+conf_ord
+```
+
+
+Try to use logistic regression (using sales variables) to predict the probability of purchase.
+```{r}
+targ_prob_sls_log <- glm(targ_prob~slstyr+slslyr+sls2ago+sls3ago, data=train, family=binomial)
+summary(targ_prob_sls_log)
+```
+```{r}
+conf_sls <- table(train$targ_prob, targ_prob_sls_log$fitted.values > 0.5)
+conf_sls
+```
+
+Use F-1 score because the data set is not balanced.

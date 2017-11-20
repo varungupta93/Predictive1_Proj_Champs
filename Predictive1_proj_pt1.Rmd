@@ -14,22 +14,32 @@ We took 2 main steps to clean the data:
 2) Update the datelp6 year to match lpuryear where needed
 
 ```{r}
-csd <- read_csv("~/MSiA/Fall 2017/MSiA_401/Project/catalog sales data.csv", 
-                col_types = cols(datead6 = col_date(format = "%m/%d/%Y"), 
-                                 datelp6 = col_date(format = "%m/%d/%Y")))
+#csd <- read_csv("~/MSiA/Fall 2017/MSiA_401/Project/catalog sales data.csv", 
+#                col_types = cols(datead6 = col_date(format = "%m/%d/%Y"), 
+#                                 datelp6 = col_date(format = "%m/%d/%Y")))
+
+library(tidyverse)
+csd <- read_csv("catalog sales data.csv", col_types = cols(datead6 = col_date(format = "%m/%d/%Y"), datelp6 = col_date(format = "%m/%d/%Y")))
+
 
 #Drop ordhist
 csd <- subset(csd, select = -c(ordhist) )
-
+csdcopy <- csd
 #Update daltelp6
-for (i in length(csd$datelp6)){
-  if(is.na(csd$lpuryear) == FALSE && substr(csd$datelp6[i],4,4) !=csd$lpuryear[i] ){
-    substr(csd$datelp6[i],4,4) <-csd$lpuryear[i]
-  }
-  i=i+1
-}
+#for (i in length(csd$datelp6)){
+#  if(is.na(csd$lpuryear) == FALSE && substr(csd$datelp6[i],4,4) < csd$lpuryear[i] ){
+#    substr(csd$datelp6[i],4,4) <-csd$lpuryear[i]
+#  }
+#  i=i+1
+#}
+
 ```
 
+```{r}
+library(dplyr)
+csd[is.na(csd$lpuryear) == FALSE & substr(csd$datelp6,4,4) < csd$lpuryear,] <- csd %>% filter(is.na(lpuryear) == FALSE & substr(datelp6,4,4) < lpuryear) %>%
+  mutate(datelp6 = as.Date(paste0(substr(datelp6,1,3), lpuryear, substr(datelp6,5,10))))
+```
 
 
 Reading in the data and separating into training and test sets.

@@ -1,0 +1,209 @@
+---
+title: "Predictive1_Project_Part1"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+```{r}
+library(tidyverse)
+library(glmnet)
+library(ordinal)
+library(mlogit)
+```
+
+## Data Cleansing
+
+We took 2 main steps to clean the data:
+1) Change ordhist value to the sum of falord and sprord
+2) Update the datelp6 year to match lpuryear where needed
+3) Drop lpuryear
+
+```{r}
+csd <- read_csv("~/z/homework/pd_project/Predictive1_Proj_Champs/catalog sales data.csv", 
+                col_types = cols(datead6 = col_date(format = "%m/%d/%Y"), 
+                                 datelp6 = col_date(format = "%m/%d/%Y")))
+
+#Drop ordhist
+#csd <- subset(csd, select = -c(ordhist))
+
+#create new ordhist by adding falord and sprord
+csd$ordhist <- csd$falord + csd$sprord
+
+#Update daltelp6
+for (i in length(csd$datelp6)){
+  if(is.na(csd$lpuryear) == FALSE && substr(csd$datelp6[i],4,4) !=csd$lpuryear[i] ){
+    substr(csd$datelp6[i],4,4) <-csd$lpuryear[i]
+  }
+  i=i+1
+}
+
+#Drop lpuryear
+csd <- subset(csd, select = -c(lpuryear))
+```
+
+Reading in the data and separating into training and test sets.
+```{r}
+#catalog <- read.csv("catalog sales data.csv", header = T)
+train <- csd[csd$train == 1,]
+test <- csd[csd$train == 0,]
+```
+
+
+```{r}
+mis_sls <- csd %>%
+  mutate(oldSales = slshist - (slstyr + slslyr + sls2ago + sls3ago)) %>%
+  filter(oldSales != 0) %>%
+  filter(as.integer(substr(datelp6,1,4)) - 3 < as.integer(substr(datead6,1,4))) %>%
+  select(-targdol, -train)
+sum(mis_sls$oldSales)
+```
+```{r}
+sum(csd$slshist)
+sum(csd$ordhist)
+```
+
+```{r}
+mis_ord <- csd %>%
+  mutate(oldSales = sprord + falord - (ordtyr + ordlyr + ord2ago + ord3ago)) %>%
+  filter(oldSales != 0) %>%
+  filter(as.integer(substr(datelp6,1,4)) - 3 < as.integer(substr(datead6,1,4))) %>%
+  select(-targdol, -train)
+sum(mis_ord$oldSales)
+```
+
+```{r}
+new_csd <- csd %>%
+  mutate(oldOrds = sprord + falord - (ordtyr + ordlyr + ord2ago + ord3ago)) %>%
+  mutate(oldSales = slshist - (slstyr + slslyr + sls2ago + sls3ago)) %>%
+  filter(!((as.integer(substr(datelp6,1,4)) - 3 <= as.integer(substr(datead6,1,4))) & (oldOrds != 0) & (oldSales !=0))) %>%
+  filter(oldOrds >= 0)
+```
+
+
+```{r}
+hist(csd$slstyr)
+hist(csd$slslyr)
+hist(csd$sls2ago)
+hist(csd$sls3ago)
+hist(csd$ordtyr)
+hist(csd$ordlyr)
+hist(csd$ord2ago)
+hist(csd$ord3ago)
+```
+
+```{r}
+new_csd %>%
+  filter(targdol != 0) %>%
+  ggplot(aes(slstyr)) + 
+  geom_histogram(binwidth = .25) + 
+  labs(title = "sales ($) this year")
+
+new_csd %>%
+  filter(targdol != 0) %>%
+  ggplot(aes(ordtyr)) + 
+  geom_histogram(binwidth = .25) + 
+  labs(title = "orders this year")
+
+new_csd %>%
+  filter(targdol != 0) %>%
+  ggplot(aes(ordlyr)) + 
+  geom_histogram(binwidth = .25) + 
+  labs(title = "orders last year")
+
+new_csd %>%
+  filter(targdol != 0) %>%
+  ggplot(aes(ord2ago)) + 
+  geom_histogram(binwidth = .25) + 
+  labs(title = "orders 2 years ago")
+
+new_csd %>%
+  filter(targdol != 0) %>%
+  ggplot(aes(ord3ago)) + 
+  geom_histogram(binwidth = .25) + 
+  labs(title = "orders 3 years ago")
+
+new_csd %>%
+  filter(targdol != 0) %>%
+  ggplot(aes(ordhist)) + 
+  geom_histogram(binwidth = .25) + 
+  labs(title = "LTD orders")
+
+new_csd %>%
+  filter(targdol != 0) %>%
+  ggplot(aes(slshist)) + 
+  geom_histogram(binwidth = .25) +
+  labs(title = "LTD dollars")
+
+new_csd %>%
+  filter(targdol != 0) %>%
+  ggplot(aes(oldSales)) + 
+  geom_histogram(binwidth = .25) +
+  labs(title = ">3yr old dollars")
+
+new_csd %>%
+  filter(targdol != 0) %>%
+  ggplot(aes(oldOrds)) + 
+  geom_histogram(binwidth = .25) +
+  labs(title = ">3yr old ords")
+```
+
+Add recency as in days data
+```{r}
+new_csd <- new_csd %>%
+  mutate(recency = (2017-as.integer(substr(datelp6,1,4)))*12*30 + (11 - as.integer(substr(datelp6,6,7)))*30 + (20-as.integer(substr(datelp6,9,10))))
+```
+
+
+```{r}
+new_csd <- new_csd %>%
+  mutate(yr0 = ifelse (slstyr > 0, 1, 0)) %>%
+  mutate(yr1 = ifelse (slslyr > 0, 1, 0)) %>%
+  mutate(yr2 = ifelse (sls2ago > 0, 1, 0)) %>%
+  mutate(yr3 = ifelse (sls3ago > 0, 1, 0)) %>%
+  mutate(yr4 = ifelse (oldSales > 0, 1, 0)) %>%
+  mutate(targdec = ifelse(targdol > 0, 1, 0)) %>%
+  mutate(recency = recency/365) %>%
+  mutate(constcy = yr0 + yr1 + yr2 + yr3 + yr4) %>%
+  select(-yr0, -yr1, -yr2, -yr3, -yr4)
+```
+
+Reading in the data and separating into training and test sets.
+```{r}
+#catalog <- read.csv("catalog sales data.csv", header = T)
+newtrain <- new_csd[new_csd$train == 1,][,-which(names(new_csd) == 'train')]
+newtest <- new_csd[new_csd$train == 0,][,-which(names(new_csd) == 'train')]
+```
+
+Ordinal model
+```{r}
+newtrain$targdec.ordered = as.ordered(newtrain$targdec)
+fit = clm(targdec.ordered~constcy+recency, data = newtrain)
+summary(fit)
+```
+
+Logistic Model
+```{r}
+newtrain1 <- mlogit.data(data = newtrain, choice = "targdec", shape = "wide", varying = NULL)
+fit1 <- mlogit(targdec~0|constcy+recency,data=newtrain1)
+summary(fit1)
+```
+```{r}
+newtest1 <- mlogit.data(data = newtest, choice = "targdec", shape = "wide", varying = NULL)
+testpred <- predict(fit1, newtest1)
+##What is the correct classification rate and how does it break down among the three categories?
+testpred <- as.integer(colnames(testpred)[apply(testpred,1,which.max)])
+```
+
+```{r}
+cattable = table(newtest$targdec, testpred)
+cattable
+sum(diag(cattable))/sum(cattable)
+```
+
+
+```{r}
+multregtrain <- catalog[]
+```
+

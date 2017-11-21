@@ -1,0 +1,47 @@
+---
+title: "catalog_sales_project_final"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+```
+
+
+## Data Cleansing
+We took 3 main steps to clean the data:
+1) Change ordhist value to the sum of falord and sprord
+2) Update the datelp6 year to match lpuryear where needed & Drop lpuryear
+3) Create oldSales & oldOrds to capture the difference between the sum of the most recent 4 years of sales/orders and the total sales/orders
+
+```{r}
+#read data
+csd <- read_csv("~/z/homework/pd_project/Predictive1_Proj_Champs/catalog sales data.csv", 
+                col_types = cols(datead6 = col_date(format = "%m/%d/%Y"), 
+                                 datelp6 = col_date(format = "%m/%d/%Y")))
+
+#1) create new ordhist by adding falord and sprord
+csd$ordhist <- csd$falord + csd$sprord
+
+#2) Update daltelp6
+csd[is.na(csd$lpuryear) == FALSE & substr(csd$datelp6,4,4) < csd$lpuryear & as.numeric(paste0(substr(csd$datelp6,3,3),csd$lpuryear)) < 13,] <- csd %>% filter(is.na(lpuryear) == FALSE & substr(datelp6,4,4) < lpuryear & as.numeric(paste0(substr(datelp6,3,3),lpuryear)) < 13) %>%
+  mutate(datelp6 = as.Date(paste0(substr(datelp6,1,3), lpuryear,"-06-30")))
+
+#Drop lpuryear
+csd <- subset(csd, select = -c(lpuryear))
+```
+
+```{r}
+#3) Adding columns for sales and orders more than 3 years ago
+new_csd <- csd %>%
+  mutate(oldOrds = sprord + falord - (ordtyr + ordlyr + ord2ago + ord3ago)) %>%
+  mutate(oldSales = slshist - (slstyr + slslyr + sls2ago + sls3ago)) %>%
+  #filter(!((as.integer(substr(datelp6,1,4)) - 3 <= as.integer(substr(datead6,1,4))) & (oldOrds != 0) & (oldSales !=0))) %>%
+  mutate(oldOrds = ifelse(oldOrds < 0, 0, oldOrds))
+```
+
+

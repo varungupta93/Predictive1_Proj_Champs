@@ -11,6 +11,7 @@ library(tidyverse)
 library(glmnet)
 library(ordinal)
 library(mlogit)
+library(car)
 ```
 
 ## Data Cleansing
@@ -32,24 +33,13 @@ csd <- read_csv("~/z/homework/pd_project/Predictive1_Proj_Champs/catalog sales d
 csd$ordhist <- csd$falord + csd$sprord
 
 #Update daltelp6
-for (i in length(csd$datelp6)){
-  if(is.na(csd$lpuryear) == FALSE && substr(csd$datelp6[i],4,4) !=csd$lpuryear[i] ){
-    substr(csd$datelp6[i],4,4) <-csd$lpuryear[i]
-  }
-  i=i+1
-}
+csd[is.na(csd$lpuryear) == FALSE & substr(csd$datelp6,4,4) < csd$lpuryear & as.numeric(paste0(substr(csd$datelp6,3,3),csd$lpuryear)) < 13,] <- csd %>% 
+  filter(is.na(lpuryear) == FALSE & substr(datelp6,4,4) < lpuryear & as.numeric(paste0(substr(datelp6,3,3),lpuryear)) < 13) %>%
+  mutate(datelp6 = as.Date(paste0(substr(datelp6,1,3), lpuryear,"-06-30")))
 
 #Drop lpuryear
 csd <- subset(csd, select = -c(lpuryear))
 ```
-
-Reading in the data and separating into training and test sets.
-```{r}
-#catalog <- read.csv("catalog sales data.csv", header = T)
-train <- csd[csd$train == 1,]
-test <- csd[csd$train == 0,]
-```
-
 
 ```{r}
 mis_sls <- csd %>%
@@ -58,10 +48,6 @@ mis_sls <- csd %>%
   filter(as.integer(substr(datelp6,1,4)) - 3 < as.integer(substr(datead6,1,4))) %>%
   select(-targdol, -train)
 sum(mis_sls$oldSales)
-```
-```{r}
-sum(csd$slshist)
-sum(csd$ordhist)
 ```
 
 ```{r}
@@ -73,15 +59,16 @@ mis_ord <- csd %>%
 sum(mis_ord$oldSales)
 ```
 
+Adding columns for sales and orders more than 3 years ago
 ```{r}
 new_csd <- csd %>%
   mutate(oldOrds = sprord + falord - (ordtyr + ordlyr + ord2ago + ord3ago)) %>%
   mutate(oldSales = slshist - (slstyr + slslyr + sls2ago + sls3ago)) %>%
-  filter(!((as.integer(substr(datelp6,1,4)) - 3 <= as.integer(substr(datead6,1,4))) & (oldOrds != 0) & (oldSales !=0))) %>%
-  filter(oldOrds >= 0)
+  #filter(!((as.integer(substr(datelp6,1,4)) - 3 <= as.integer(substr(datead6,1,4))) & (oldOrds != 0) & (oldSales !=0))) %>%
+  mutate(oldOrds = ifelse(oldOrds < 0, 0, oldOrds))
 ```
 
-
+EDA histograms
 ```{r}
 hist(csd$slstyr)
 hist(csd$slslyr)
@@ -93,6 +80,7 @@ hist(csd$ord2ago)
 hist(csd$ord3ago)
 ```
 
+EDA graphs
 ```{r}
 new_csd %>%
   filter(targdol != 0) %>%
@@ -155,19 +143,32 @@ new_csd <- new_csd %>%
   mutate(recency = (2017-as.integer(substr(datelp6,1,4)))*12*30 + (11 - as.integer(substr(datelp6,6,7)))*30 + (20-as.integer(substr(datelp6,9,10))))
 ```
 
+Change recency from days based to year based
+```{r}
+new_csd$recency <- new_csd$recency/365
+```
 
 ```{r}
+hist(new_csd$recency)
+hist(log(new_csd$recency))
+```
+
+Prep the data for binomial prediction, adding targdec column (0/1)
+```{r}
+new_csd <- new_csd %>%
+  mutate(targdec = ifelse(targdol > 0, 1, 0)) %>%
+  select(-datead6, datelp6)
+```
+
+##Treat consistency as 1/0 for each year if needed
 new_csd <- new_csd %>%
   mutate(yr0 = ifelse (slstyr > 0, 1, 0)) %>%
   mutate(yr1 = ifelse (slslyr > 0, 1, 0)) %>%
   mutate(yr2 = ifelse (sls2ago > 0, 1, 0)) %>%
   mutate(yr3 = ifelse (sls3ago > 0, 1, 0)) %>%
   mutate(yr4 = ifelse (oldSales > 0, 1, 0)) %>%
-  mutate(targdec = ifelse(targdol > 0, 1, 0)) %>%
-  mutate(recency = recency/365) %>%
   mutate(constcy = yr0 + yr1 + yr2 + yr3 + yr4) %>%
   select(-yr0, -yr1, -yr2, -yr3, -yr4)
-```
 
 Reading in the data and separating into training and test sets.
 ```{r}
@@ -176,23 +177,52 @@ newtrain <- new_csd[new_csd$train == 1,][,-which(names(new_csd) == 'train')]
 newtest <- new_csd[new_csd$train == 0,][,-which(names(new_csd) == 'train')]
 ```
 
-Ordinal model
-```{r}
+##Ordinal model may not be needed
 newtrain$targdec.ordered = as.ordered(newtrain$targdec)
 fit = clm(targdec.ordered~constcy+recency, data = newtrain)
 summary(fit)
-```
 
-Logistic Model
+
+#prep data for logistic model and testing
 ```{r}
 newtrain1 <- mlogit.data(data = newtrain, choice = "targdec", shape = "wide", varying = NULL)
-fit1 <- mlogit(targdec~0|constcy+recency,data=newtrain1)
+newtest1 <- mlogit.data(data = newtest, choice = "targdec", shape = "wide", varying = NULL)
+```
+
+#Logistic Models
+##Logistic Model without interactions
+```{r}
+fit1 <- mlogit(targdec~0|ordtyr+ordlyr+ord2ago+ord3ago+oldSales+oldOrds+recency, data=newtrain1)
 summary(fit1)
 ```
+
+```{r}
+testpred1 <- predict(fit1, newtest1)
+testpred1 <- as.integer(colnames(testpred1)[apply(testpred1,1,which.max)])
+```
+
+```{r}
+cattable1 = table(newtest$targdec, testpred1)
+cattable1
+sum(diag(cattable1))/sum(cattable1)
+```
+
+F1 score
+```{r}
+P <- cattable1[2,2]/(sum(cattable1[2,]))
+R <- cattable1[2,2]/(sum(cattable1[,2]))
+2*P*R/(P+R)
+```
+
+##Logistic Model with Normal Data
+```{r}
+fit2 <- mlogit(targdec~0|ordtyr+ordlyr+ord2ago+ord3ago+oldSales+oldOrds+recency+ordtyr:ordlyr:ord2ago:ord3ago:oldOrds, data=newtrain1)
+summary(fit2)
+```
+
 ```{r}
 newtest1 <- mlogit.data(data = newtest, choice = "targdec", shape = "wide", varying = NULL)
-testpred <- predict(fit1, newtest1)
-##What is the correct classification rate and how does it break down among the three categories?
+testpred <- predict(fit2, newtest1)
 testpred <- as.integer(colnames(testpred)[apply(testpred,1,which.max)])
 ```
 
@@ -202,8 +232,136 @@ cattable
 sum(diag(cattable))/sum(cattable)
 ```
 
+#Multiple regression model
+```{r}
+mlmtrain <- newtrain[newtrain$targdec == 1,][,-which(names(newtrain) == 'targdec')]
+```
+
+filter only targdol>0 & add recent sales and recent orders columns for train and test
+```{r}
+mlmtrain <- mlmtrain %>%
+  select(-datelp6,-falord,-sprord) %>%
+  filter(targdol > 0) %>%
+  mutate(slsrecent = slstyr+slslyr+sls2ago+sls3ago) %>%
+  mutate(ordrecent = ordtyr+ordlyr+ord2ago+ord3ago)
+```
 
 ```{r}
-multregtrain <- catalog[]
+mlmtest <- newtest %>%
+  filter(targdol > 0) %>%
+  select(-datelp6,-falord,-sprord) %>%
+  mutate(slsrecent = slstyr+slslyr+sls2ago+sls3ago) %>%
+  mutate(ordrecent = ordtyr+ordlyr+ord2ago+ord3ago)
+```
+
+##full multi regression model
+```{r}
+mlmfit <- lm(targdol~., data = mlmtrain)
+summary(mlmfit)
+sum(((mlmtest$targdol) - (predict(mlmfit, newdata = mlmtest)))^2)
+plot(mlmfit)
+```
+
+##full mlm with log transformation
+```{r}
+mlmfit.log <- lm(log(targdol)~., data = mlmtrain)
+summary(mlmfit.log)
+sum(((mlmtest$targdol) - (predict(mlmfit.log, newdata = mlmtest)))^2)
+plot(mlmfit.log)
+```
+
+##full mlm with box cox transformation
+```{r}
+boxCox(mlmfit, family="yjPower", plotit = TRUE)
+#tranform response
+depvar.transformed <- yjPower(mlmtrain$targdol, -.2)
+glm.mod <- glm(depvar.transformed~+slstyr+slslyr+sls2ago+sls3ago+slshist+ordtyr+ordlyr+ord2ago+ord3ago+ordhist+oldOrds+oldSales+recency+slsrecent+ordrecent, family=gaussian(link="log"), data = mlmtrain)
+summary(glm.mod)
+sum(((mlmtest$targdol) - (predict(glm.mod, newdata = mlmtest)))^2)
+plot(glm.mod)
+#transform predictors
+#boxTidwell(depvar.transformed~slstyr:slslyr:sls2ago:sls3ago:slshist:oldSales+ordtyr:ordlyr:ord2ago:ord3ago:ordhist:oldOrds+recency+slsrecent:ordrecent, data=mlmtrain)
+```
+
+##steps with box cosx
+
+##steps with no transformation
+```{r}
+step(mlmfit, direction = "backward")
+```
+##best fit using backward steps
+```{r}
+mlmfit.steps <- lm(targdol ~ slstyr + slslyr + sls2ago + slshist + ordtyr + ordlyr + 
+    ord2ago + ord3ago, data=mlmtrain)
+summary(mlmfit.steps)
+sum(((mlmtest$targdol) - (predict(mlmfit.steps, newdata = mlmtest)))^2)
+```
+
+##steps using log transformation
+```{r}
+step(mlmfit.log, direction = "backward")
+```
+
+##best fit using steps with log transformation
+```{r}
+mlmfit.log.steps <- lm(log(targdol)~slstyr + slslyr + sls2ago + slshist + 
+    ordtyr + ordlyr + ord2ago + ord3ago, data = mlmtrain)
+summary(mlmfit.log.steps)
+sum(((mlmtest$targdol) - (predict(mlmfit.log.steps, newdata = mlmtest)))^2)
+plot(mlmfit.log.steps)
+```
+
+Lasso with log transformation (needs fixing)
+```{r}
+ridgefit <- glmnet(log(targdol)~slstyr + slslyr + sls2ago + slshist + 
+    ordtyr + ordlyr + ord2ago + ord3ago, data = mlmtrain, alpha=1, lambda=seq(0,10,0.01))
+summary(ridgefit)
+```
+
+
+```{r}
+mlmfit.not <- lm(targdol ~ slsrecent:slshist + oldSales:slshist + ordrecent:ordhist + oldOrds:ordhist + recency, data=mlmtrain)
+summary(mlmfit.not)
+sum(((mlmtest$targdol) - (predict(mlmfit.not, newdata = mlmtest)))^2)
+```
+
+```{r}
+hist(mlmtrain$targdol)
+```
+
+full model will have:
+targdol~targdol+slstyr+slslyr+sls2ago+sls3ago+slshist+ordtyr+ordlyr+ord2ago+ord3ago+ordhist+oldOrds+oldSales+recency+slsrecent+ordrecent
+```{r}
+pfit <- glm(targdol~slsrecent+ordrecent+oldOrds+oldSales+recency, data = mlmtrain, family=poisson(log))
+summary(pfit)
+sum(((mlmtest$targdol) - (predict(pfit, newdata = mlmtest)))^2)
+```
+
+##Max sales dollars in the test model
+```{r}
+this <- newtest %>%
+  arrange(desc(targdol)) %>%
+  top_n(1000, targdol) %>%
+  summarise(sum(targdol), mean(targdol))
+```
+
+```{r}
+mlmtest %>%
+  summarise_all(mean)
+
+mlmtest %>%
+  summarise_all(sd)
+```
+
+```{r}
+hist(log(mlmtest$targdol))
+```
+
+```{r}
+hist(log(mlmtrain$targdol))
+```
+
+```{r}
+cor(mlmtrain)
 ```
 

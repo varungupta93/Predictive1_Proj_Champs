@@ -1,0 +1,217 @@
+---
+title: "catalog_sales_project_final"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(pROC)
+```
+
+
+## Data Cleansing
+We took 3 main steps to clean the data:
+1) Change ordhist value to the sum of falord and sprord
+2) Update the datelp6 year to match lpuryear where needed & Drop lpuryear
+3) Create oldSales & oldOrds to capture the difference between the sum of the most recent 4 years of sales/orders and the total sales/orders
+
+```{r}
+#read data
+csd <- read_csv("../catalog sales data.csv", 
+                col_types = cols(datead6 = col_date(format = "%m/%d/%Y"), 
+                                 datelp6 = col_date(format = "%m/%d/%Y")))
+
+#1) create new ordhist by adding falord and sprord
+csd$ordhist <- csd$falord + csd$sprord
+
+#2) Update daltelp6
+csd[is.na(csd$lpuryear) == FALSE & substr(csd$datelp6,4,4) < csd$lpuryear & as.numeric(paste0(substr(csd$datelp6,3,3),csd$lpuryear)) < 13,] <- csd %>% filter(is.na(lpuryear) == FALSE & substr(datelp6,4,4) < lpuryear & as.numeric(paste0(substr(datelp6,3,3),lpuryear)) < 13) %>%
+  mutate(datelp6 = as.Date(paste0(substr(datelp6,1,3), lpuryear,"-06-30")))
+
+#Drop lpuryear
+csd <- subset(csd, select = -c(lpuryear))
+```
+
+```{r}
+#3) Adding columns for sales and orders more than 3 years ago
+new_csd <- csd %>%
+  mutate(oldOrds = sprord + falord - (ordtyr + ordlyr + ord2ago + ord3ago)) %>%
+  mutate(oldSales = slshist - (slstyr + slslyr + sls2ago + sls3ago)) %>%
+  #filter(!((as.integer(substr(datelp6,1,4)) - 3 <= as.integer(substr(datead6,1,4))) & (oldOrds != 0) & (oldSales !=0))) %>%
+  mutate(oldOrds = ifelse(oldOrds < 0, 0, oldOrds))
+```
+
+```{r}
+sales <- read_csv("../catalog sales data.csv", 
+                col_types = cols(datead6 = col_date(format = "%m/%d/%Y"), 
+                                 datelp6 = col_date(format = "%m/%d/%Y")))
+```
+
+The latest date: 2012/12/01
+```{r}
+new_csd <- new_csd %>%
+  mutate(days = (2012-as.integer(substr(datelp6,1,4)))*12*30 + (12 - as.integer(substr(datelp6,6,7)))*30 + (1-as.integer(substr(datelp6,9,10)))) %>%
+  mutate(recency = days/365)
+```
+
+```{r}
+new_csd <- new_csd %>%
+  mutate(factyr = ifelse(slstyr>0, 1, 0)) %>%
+  mutate(faclyr = ifelse(slslyr>0, 1, 0)) %>%
+  mutate(fac2ago = ifelse(sls2ago>0, 1, 0)) %>%
+  mutate(fac3ago = ifelse(sls3ago>0, 1, 0))
+```
+
+```{r}
+new_csd <- new_csd %>%
+  mutate(avgtyr = ifelse(ordtyr>0, slstyr/ordtyr, 0)) %>%
+  mutate(avglyr = ifelse(ordlyr>0, slslyr/ordlyr, 0)) %>%
+  mutate(avg2ago = ifelse(ord2ago>0, sls2ago/ord2ago, 0)) %>%
+  mutate(avg3ago = ifelse(ord3ago>0, sls3ago/ord3ago, 0)) %>%
+  mutate(avghist = ifelse((falord+sprord)>0, slshist/(falord+sprord), 0))
+```
+
+
+```{r}
+new_csd
+```
+
+```{r}
+table(new_csd$ordtyr)
+```
+
+```{r}
+table(new_csd$ordlyr)
+```
+
+
+## Apply logistic model to predict whether the customer would buy.
+
+```{r}
+train <- new_csd[new_csd$train == 1,]
+test <- new_csd[new_csd$train == 0,]
+```
+
+Distribution of training and test data
+```{r}
+train$targ_prob <- ifelse(train$targdol > 0, 1, 0)
+test$targ_prob <- ifelse(test$targdol > 0, 1, 0)
+print('training data table:')
+train_baseline <- table(train$targ_prob)
+train_baseline
+print('test data table:')
+test_baseline <- table(test$targ_prob)
+test_baseline
+```
+
+Baseline accuracy:
+```{r}
+print('training data baseline:')
+train_baseline[[1]]/sum(train_baseline)
+print('test data baseline:')
+test_baseline[[1]]/sum(test_baseline)
+```
+
+```{r}
+str(train)
+```
+
+calculate the measures of Correct Classification, based on confusion matrix, including accuracy, precision, recall, and F1_score.
+```{r}
+class_Measure <- function(conf_matrix){
+  accuracy <- sum(diag(conf_matrix))/sum(conf_matrix)
+  precision <- unname(conf_matrix[2,2]/colSums(conf_matrix)[2])
+  recall <- unname(conf_matrix[2,2]/rowSums(conf_matrix)[2])
+  f1_score <- unname(2*precision*recall/(precision+recall))
+  list(Accuracy = accuracy, Precision = precision, Recall = recall, Fscore = f1_score)
+}
+```
+
+Scan the threshold for the highest F score by grid search
+```{r}
+search_cutoff <- function(data_resp, data_pred, step=0.01){
+  
+  cutoff <- seq(0, 0.99, step)
+  Fscore_max <- 0
+  F_threshold <- 0
+  Accuracy_max <- 0
+  Acc_threshold <- 0
+  for (prob_thr in cutoff) {
+    prob_pred <- ifelse(data_pred<prob_thr, 0, 1)
+    prob_pred <- factor(prob_pred, levels=c(0,1))
+    conf_matrix <- table(data_resp, prob_pred)
+    pred_perf <- class_Measure(conf_matrix)
+    if (pred_perf$Fscore > Fscore_max) {
+      F_threshold <- prob_thr
+      Fscore_max <- pred_perf$Fscore
+    }
+    if ((pred_perf$Accuracy) > Accuracy_max) {
+      Acc_threshold <- prob_thr
+      Accuracy_max <- pred_perf$Accuracy
+    }
+  }
+  list(MaxFscore = Fscore_max, FsCutoff = F_threshold, MaxAccuracy = Accuracy_max, AccCutoff = Acc_threshold)
+}
+```
+
+
+### Regression Model
+
+```{r}
+new_csd
+```
+
+aggregate order into group, and treat order as factors
+I tried to aggregate (0, 1, 2, 3+) four groups, but it did not work well as one-hot coding.
+
+```{r}
+new_csd2 <- new_csd %>%
+  mutate(targ_prob = ifelse(targdol > 0, 1, 0)) %>%
+  mutate(factyr = ifelse(ordtyr>0, 1, ordtyr)) %>%
+  mutate(factyr = factor(factyr, levels=c(0,1))) %>%
+  mutate(faclyr = ifelse(ordlyr>0, 1, ordlyr)) %>%
+  mutate(faclyr = factor(faclyr, levels=c(0,1))) %>%
+  mutate(fac2ago = ifelse(ord2ago>0, 1, ord2ago)) %>%
+  mutate(fac2ago = factor(fac2ago, levels=c(0,1))) %>%
+  mutate(fac3ago = ifelse(ord3ago>0, 1, ord3ago)) %>%
+  mutate(fac3ago = factor(fac3ago, levels=c(0,1)))
+
+train2 <- new_csd2[new_csd$train == 1,]
+test2 <- new_csd2[new_csd$train == 0,]
+```
+
+```{r}
+new_csd2
+```
+
+consider both consistency and recency
+
+```{r}
+targ_prob_fit <- glm(targ_prob~faclyr+(faclyr:fac2ago)+(faclyr:fac2ago:fac3ago)+slshist+falord+sprord+recency, data=train2, family=binomial)
+summary(targ_prob_fit)
+fit_roc <- plot.roc(train2$targ_prob, targ_prob_fit$fitted.values, xlim=c(1,0), xlab='1-Specificity')
+fit_roc ##0.7934
+```
+
+Do grid search on training for optimal threshold for CCR and F1 score separately,
+then use the threshold on the test set.
+```{r}
+print('on training set')
+prob_cutoff <- search_cutoff(train2$targ_prob, targ_prob_fit$fitted.values)
+
+print('on test set')
+targ_test_pred <- predict(targ_prob_fit, newdata=test2, type='response')
+
+print('Base on the highest Accuracy of training set')
+test_ord <- table(test2$targ_prob, targ_test_pred > prob_cutoff$AccCutoff)
+class_Measure(test_ord)
+
+print('Base on the highest F scocre of training set')
+test_ord <- table(test2$targ_prob, targ_test_pred > prob_cutoff$FsCutoff)
+class_Measure(test_ord)
+```
+

@@ -10,6 +10,7 @@ knitr::opts_chunk$set(echo = TRUE)
 ```{r}
 library(tidyverse)
 library(pROC)
+library(car)
 ```
 
 
@@ -75,26 +76,32 @@ new_csd <- new_csd %>%
   mutate(avghist = ifelse((falord+sprord)>0, slshist/(falord+sprord), 0))
 ```
 
-
 ```{r}
-new_csd
+new_csd <- new_csd %>%
+  mutate(targ_prob = ifelse(targdol > 0, 1, 0)) %>%
+  mutate(factyr = ifelse(ordtyr>0, 1, ordtyr)) %>%
+  mutate(factyr = factor(factyr, levels=c(0,1))) %>%
+  mutate(faclyr = ifelse(ordlyr>0, 1, ordlyr)) %>%
+  mutate(faclyr = factor(faclyr, levels=c(0,1))) %>%
+  mutate(fac2ago = ifelse(ord2ago>0, 1, ord2ago)) %>%
+  mutate(fac2ago = factor(fac2ago, levels=c(0,1))) %>%
+  mutate(fac3ago = ifelse(ord3ago>0, 1, ord3ago)) %>%
+  mutate(fac3ago = factor(fac3ago, levels=c(0,1)))
 ```
 
 ```{r}
-table(new_csd$ordtyr)
+new_csd <- new_csd %>%
+  mutate(recency_fac = ifelse(recency>=5, 5, ifelse(recency>=4.75, 4.75,ifelse(recency>=4.5, 4.5, ifelse(recency>=4.25, 4.25, ifelse(recency>=4, 4, ifelse(recency>=3.75, 3.75,ifelse(recency>=3.5, 3.5, ifelse(recency>=3.25, 3.25, ifelse(recency>3, 3, ifelse(recency>=2.75, 2.75, ifelse(recency>=2.5, 2.5, ifelse(recency>=2.25, 2.25, ifelse(recency>=2, 2, ifelse(recency>=1.75, 1.75, ifelse(recency>=1.5, 1.5, ifelse(recency>=1.25, 1.25, ifelse(recency>=1, 1, ifelse(recency>=0.75, 0.75, ifelse(recency>=0.5, 0.5, ifelse(recency>=0.25, 0.25, 0 ))))))))))))))))))))) %>%
+  mutate(recency_fac = factor(recency_fac))
 ```
 
-```{r}
-table(new_csd$ordlyr)
-```
-
-
-## Apply logistic model to predict whether the customer would buy.
 
 ```{r}
 train <- new_csd[new_csd$train == 1,]
 test <- new_csd[new_csd$train == 0,]
 ```
+
+## Apply logistic model to predict whether the customer would buy.
 
 Distribution of training and test data
 ```{r}
@@ -116,11 +123,7 @@ print('test data baseline:')
 test_baseline[[1]]/sum(test_baseline)
 ```
 
-```{r}
-str(train)
-```
-
-calculate the measures of Correct Classification, based on confusion matrix, including accuracy, precision, recall, and F1_score.
+Utility function: calculate the measures of Correct Classification, based on confusion matrix, including accuracy, precision, recall, and F1_score.
 ```{r}
 class_Measure <- function(conf_matrix){
   accuracy <- sum(diag(conf_matrix))/sum(conf_matrix)
@@ -131,7 +134,7 @@ class_Measure <- function(conf_matrix){
 }
 ```
 
-Scan the threshold for the highest F score by grid search
+Utility function: Scan the threshold for the highest F score by grid search
 ```{r}
 search_cutoff <- function(data_resp, data_pred, step=0.01){
   
@@ -159,59 +162,38 @@ search_cutoff <- function(data_resp, data_pred, step=0.01){
 ```
 
 
-### Regression Model
+### Logistic model: consider both consistency and recency
 
 ```{r}
-new_csd
-```
-
-aggregate order into group, and treat order as factors
-I tried to aggregate (0, 1, 2, 3+) four groups, but it did not work well as one-hot coding.
-
-```{r}
-new_csd2 <- new_csd %>%
-  mutate(targ_prob = ifelse(targdol > 0, 1, 0)) %>%
-  mutate(factyr = ifelse(ordtyr>0, 1, ordtyr)) %>%
-  mutate(factyr = factor(factyr, levels=c(0,1))) %>%
-  mutate(faclyr = ifelse(ordlyr>0, 1, ordlyr)) %>%
-  mutate(faclyr = factor(faclyr, levels=c(0,1))) %>%
-  mutate(fac2ago = ifelse(ord2ago>0, 1, ord2ago)) %>%
-  mutate(fac2ago = factor(fac2ago, levels=c(0,1))) %>%
-  mutate(fac3ago = ifelse(ord3ago>0, 1, ord3ago)) %>%
-  mutate(fac3ago = factor(fac3ago, levels=c(0,1)))
-
-train2 <- new_csd2[new_csd$train == 1,]
-test2 <- new_csd2[new_csd$train == 0,]
-```
-
-```{r}
-new_csd2
-```
-
-consider both consistency and recency
-
-```{r}
-targ_prob_fit <- glm(targ_prob~faclyr+(faclyr:fac2ago)+(faclyr:fac2ago:fac3ago)+slshist+falord+sprord+recency, data=train2, family=binomial)
+targ_prob_fit <- glm(targ_prob~faclyr+(faclyr:fac2ago)+(faclyr:fac2ago:fac3ago)+slshist+falord+sprord+recency_fac, data=train, family=binomial)
 summary(targ_prob_fit)
-fit_roc <- plot.roc(train2$targ_prob, targ_prob_fit$fitted.values, xlim=c(1,0), xlab='1-Specificity')
-fit_roc ##0.7934
+prob_fit_roc <- plot.roc(train$targ_prob, targ_prob_fit$fitted.values, xlim=c(1,0), xlab='1-Specificity')
+prob_fit_roc
 ```
 
-Do grid search on training for optimal threshold for CCR and F1 score separately,
-then use the threshold on the test set.
 ```{r}
 print('on training set')
-prob_cutoff <- search_cutoff(train2$targ_prob, targ_prob_fit$fitted.values)
+prob_cutoff <- search_cutoff(train$targ_prob, targ_prob_fit$fitted.values)
 
 print('on test set')
-targ_test_pred <- predict(targ_prob_fit, newdata=test2, type='response')
+targ_test_pred <- predict(targ_prob_fit, newdata=test, type='response')
 
 print('Base on the highest Accuracy of training set')
-test_ord <- table(test2$targ_prob, targ_test_pred > prob_cutoff$AccCutoff)
+test_ord <- table(test$targ_prob, targ_test_pred > prob_cutoff$AccCutoff)
 class_Measure(test_ord)
 
 print('Base on the highest F scocre of training set')
-test_ord <- table(test2$targ_prob, targ_test_pred > prob_cutoff$FsCutoff)
+test_ord <- table(test$targ_prob, targ_test_pred > prob_cutoff$FsCutoff)
 class_Measure(test_ord)
 ```
+```{r}
+prob_cutoff
+```
+
+```{r}
+vif(targ_prob_fit)
+```
+
+
+
 

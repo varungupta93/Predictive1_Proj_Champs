@@ -55,6 +55,7 @@ test <- new_csd[new_csd$train == 0,]
 
 train_lm <- new_csd[new_csd$targdol > 0,]
 
+
 ```
 
 
@@ -105,23 +106,45 @@ plot(lm.15 , which = 1:2)
 plot(lm.16 , which = 1:2)
 ```
 
+
+
+Since most of the QQ plots don't look very linear, lets log(targdol) and see the results:
 ```{r}
+train_lm$targdol_l <- log(train_lm$targdol)
+lm.1_l <- lm(targdol_l~datead6, data= train_lm)
+lm.2_l <- lm(targdol_l~datelp6, data= train_lm)
+lm.3_l<- lm(targdol_l~slstyr, data= train_lm)
+lm.4_l <- lm(targdol_l~slslyr, data= train_lm)
+lm.5_l <- lm(targdol_l~sls2ago, data= train_lm)
+lm.6_l <- lm(targdol_l~sls3ago, data= train_lm)
 
 ```
 
-```{r}
 
+datead6:
+```{r}
+summary(lm.1)
+summary(lm.1_l)
+plot(lm.1, which = 1:2)
+plot(lm.1_l, which= 1:2)
+```
+
+sls2ago:
+```{r}
+summary(lm.5)
+summary(lm.5_l)
+plot(lm.5, which = 1:2)
+plot(lm.5_l, which= 1:2)
+```
+
+
+It looks like logging the response variable will improve our normality assumption accross the board. Also, logging sales data is not uncommon in industry. 
+
+```{r}
+fit_1 <- lm(targdol_l~ . -targdol -lpuryear -train -falord -sprord -oldSales , data=train_lm)
+summary(fit_1)
 ```
 
 ```{r}
-
-```
-
-```{r}
-
-```
-
-```{r}
-
 ```
 

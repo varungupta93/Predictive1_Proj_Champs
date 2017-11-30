@@ -1,0 +1,150 @@
+---
+title: "Matt_project"
+author: "Matthew Gallagher"
+date: "11/24/2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+```
+
+
+## Data Cleansing
+We took 3 main steps to clean the data:
+1) Change ordhist value to the sum of falord and sprord
+2) Update the datelp6 year to match lpuryear where needed & Drop lpuryear
+3) Create oldSales & oldOrds to capture the difference between the sum of the most recent 4 years of sales/orders and the total sales/orders
+
+```{r}
+#read data
+csd <- read_csv("/Users/matthewgallagher/MSiA/Fall 2017/MSiA_401/Project/catalog sales data.csv", 
+                col_types = cols(datead6 = col_date(format = "%m/%d/%Y"), 
+                                 datelp6 = col_date(format = "%m/%d/%Y")))
+
+#1) create new ordhist by adding falord and sprord
+csd$ordhist <- csd$falord + csd$sprord
+
+#2) Update daltelp6
+csd[is.na(csd$lpuryear) == FALSE & substr(csd$datelp6,4,4) < csd$lpuryear & as.numeric(paste0(substr(csd$datelp6,3,3),csd$lpuryear)) < 13,] <- csd %>% filter(is.na(lpuryear) == FALSE & substr(datelp6,4,4) < lpuryear & as.numeric(paste0(substr(datelp6,3,3),lpuryear)) < 13) %>%
+  mutate(datelp6 = as.Date(paste0(substr(datelp6,1,3), lpuryear,"-06-30")))
+
+#Drop lpuryear
+#csd <- subset(csd, select = -c(lpuryear))
+```
+
+```{r}
+#3) Adding columns for sales and orders more than 3 years ago
+new_csd <- csd %>%
+  mutate(oldOrds = sprord + falord - (ordtyr + ordlyr + ord2ago + ord3ago)) %>%
+  mutate(oldSales = slshist - (slstyr + slslyr + sls2ago + sls3ago)) %>%
+  #filter(!((as.integer(substr(datelp6,1,4)) - 3 <= as.integer(substr(datead6,1,4))) & (oldOrds != 0) & (oldSales !=0))) %>%
+  mutate(oldOrds = ifelse(oldOrds < 0, 0, oldOrds))
+```
+
+Make purchase variable, and split out training model for linear models
+```{r}
+#new_csd$purchase <- ifelse(new_csd$targdol>0,1,0)
+
+train <- new_csd[new_csd$train == 1,]
+test <- new_csd[new_csd$train == 0,]
+
+train_lm <- new_csd[new_csd$targdol > 0,]
+
+
+```
+
+
+```{r}
+lm.1 <- lm(targdol~datead6, data= train_lm)
+lm.2 <- lm(targdol~datelp6, data= train_lm)
+lm.3 <- lm(targdol~slstyr, data= train_lm)
+lm.4 <- lm(targdol~slslyr, data= train_lm)
+lm.5 <- lm(targdol~sls2ago, data= train_lm)
+lm.6 <- lm(targdol~sls3ago, data= train_lm)
+lm.7 <- lm(targdol~slshist, data= train_lm)
+lm.8 <- lm(targdol~ordtyr, data= train_lm)
+lm.9 <- lm(targdol~ordlyr, data= train_lm)
+lm.10 <- lm(targdol~ord2ago, data= train_lm)
+lm.11 <- lm(targdol~ord3ago, data= train_lm)
+lm.12 <- lm(targdol~ordhist, data= train_lm)
+lm.13 <- lm(targdol~falord, data= train_lm)
+lm.14 <- lm(targdol~sprord, data= train_lm)
+lm.15 <- lm(targdol~oldOrds, data= train_lm)
+lm.16 <- lm(targdol~oldSales, data= train_lm)
+```
+
+Plots for datead6, datelp6, slstyr, slslyr, sls2ago, sls3ago
+```{r}
+plot(lm.1 , which = 1:2)
+plot(lm.2 , which = 1:2)
+plot(lm.3 , which = 1:2)
+plot(lm.4 , which = 1:2)
+plot(lm.5 , which = 1:2)
+plot(lm.6 , which = 1:2)
+```
+
+Plots for slshist,ordtyr, ordlyr, ord2ago, ord3ago
+```{r}
+plot(lm.7 , which = 1:2)
+plot(lm.8 , which = 1:2)
+plot(lm.9 , which = 1:2)
+plot(lm.10 , which = 1:2)
+plot(lm.11 , which = 1:2)
+```
+
+Plots for ordhist, falord, sprord, oldOrds, oldSales
+```{r}
+plot(lm.12 , which = 1:2)
+plot(lm.13 , which = 1:2)
+plot(lm.14 , which = 1:2)
+plot(lm.15 , which = 1:2)
+plot(lm.16 , which = 1:2)
+```
+
+
+
+Since most of the QQ plots don't look very linear, lets log(targdol) and see the results:
+```{r}
+train_lm$targdol_l <- log(train_lm$targdol)
+lm.1_l <- lm(targdol_l~datead6, data= train_lm)
+lm.2_l <- lm(targdol_l~datelp6, data= train_lm)
+lm.3_l<- lm(targdol_l~slstyr, data= train_lm)
+lm.4_l <- lm(targdol_l~slslyr, data= train_lm)
+lm.5_l <- lm(targdol_l~sls2ago, data= train_lm)
+lm.6_l <- lm(targdol_l~sls3ago, data= train_lm)
+
+```
+
+
+datead6:
+```{r}
+summary(lm.1)
+summary(lm.1_l)
+plot(lm.1, which = 1:2)
+plot(lm.1_l, which= 1:2)
+```
+
+sls2ago:
+```{r}
+summary(lm.5)
+summary(lm.5_l)
+plot(lm.5, which = 1:2)
+plot(lm.5_l, which= 1:2)
+```
+
+
+It looks like logging the response variable will improve our normality assumption accross the board. Also, logging sales data is not uncommon in industry. 
+
+```{r}
+fit_1 <- lm(targdol_l~ . -targdol -lpuryear -train -falord -sprord -oldSales , data=train_lm)
+summary(fit_1)
+```
+
+```{r}
+```
+

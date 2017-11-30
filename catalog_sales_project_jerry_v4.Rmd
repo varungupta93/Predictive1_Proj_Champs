@@ -1,0 +1,358 @@
+---
+title: "catalog_sales_project_final"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(pROC)
+library(car)
+```
+
+
+## Data Cleansing
+We took 3 main steps to clean the data:
+1) Change ordhist value to the sum of falord and sprord
+2) Update the datelp6 year to match lpuryear where needed & Drop lpuryear
+3) Create oldSales & oldOrds to capture the difference between the sum of the most recent 4 years of sales/orders and the total sales/orders
+
+```{r}
+#read data
+csd <- read_csv("../catalog sales data.csv", 
+                col_types = cols(datead6 = col_date(format = "%m/%d/%Y"), 
+                                 datelp6 = col_date(format = "%m/%d/%Y")))
+
+#1) create new ordhist by adding falord and sprord
+csd$ordhist <- csd$falord + csd$sprord
+
+#2) Update daltelp6
+csd[is.na(csd$lpuryear) == FALSE & substr(csd$datelp6,4,4) < csd$lpuryear & as.numeric(paste0(substr(csd$datelp6,3,3),csd$lpuryear)) < 13,] <- csd %>% filter(is.na(lpuryear) == FALSE & substr(datelp6,4,4) < lpuryear & as.numeric(paste0(substr(datelp6,3,3),lpuryear)) < 13) %>%
+  mutate(datelp6 = as.Date(paste0(substr(datelp6,1,3), lpuryear,"-06-30")))
+
+#Drop lpuryear
+csd <- subset(csd, select = -c(lpuryear))
+```
+
+```{r}
+#3) Adding columns for sales and orders more than 3 years ago
+new_csd <- csd %>%
+  mutate(oldOrds = sprord + falord - (ordtyr + ordlyr + ord2ago + ord3ago)) %>%
+  mutate(oldSales = slshist - (slstyr + slslyr + sls2ago + sls3ago)) %>%
+  #filter(!((as.integer(substr(datelp6,1,4)) - 3 <= as.integer(substr(datead6,1,4))) & (oldOrds != 0) & (oldSales !=0))) %>%
+  mutate(oldOrds = ifelse(oldOrds < 0, 0, oldOrds))
+```
+
+```{r}
+sales <- read_csv("../catalog sales data.csv", 
+                col_types = cols(datead6 = col_date(format = "%m/%d/%Y"), 
+                                 datelp6 = col_date(format = "%m/%d/%Y")))
+```
+
+The latest date: 2012/12/01
+```{r}
+new_csd <- new_csd %>%
+  mutate(days = (2012-as.integer(substr(datelp6,1,4)))*12*30 + (12 - as.integer(substr(datelp6,6,7)))*30 + (1-as.integer(substr(datelp6,9,10)))) %>%
+  mutate(recency = days/365)
+```
+
+```{r}
+new_csd <- new_csd %>%
+  mutate(factyr = ifelse(slstyr>0, 1, 0)) %>%
+  mutate(faclyr = ifelse(slslyr>0, 1, 0)) %>%
+  mutate(fac2ago = ifelse(sls2ago>0, 1, 0)) %>%
+  mutate(fac3ago = ifelse(sls3ago>0, 1, 0))
+```
+
+```{r}
+new_csd <- new_csd %>%
+  mutate(avgtyr = ifelse(ordtyr>0, slstyr/ordtyr, 0)) %>%
+  mutate(avglyr = ifelse(ordlyr>0, slslyr/ordlyr, 0)) %>%
+  mutate(avg2ago = ifelse(ord2ago>0, sls2ago/ord2ago, 0)) %>%
+  mutate(avg3ago = ifelse(ord3ago>0, sls3ago/ord3ago, 0)) %>%
+  mutate(avghist = ifelse((falord+sprord)>0, slshist/(falord+sprord), 0))
+```
+
+```{r}
+new_csd <- new_csd %>%
+  mutate(targ_prob = ifelse(targdol > 0, 1, 0)) %>%
+  mutate(factyr = ifelse(ordtyr>0, 1, ordtyr)) %>%
+  mutate(factyr = factor(factyr, levels=c(0,1))) %>%
+  mutate(faclyr = ifelse(ordlyr>0, 1, ordlyr)) %>%
+  mutate(faclyr = factor(faclyr, levels=c(0,1))) %>%
+  mutate(fac2ago = ifelse(ord2ago>0, 1, ord2ago)) %>%
+  mutate(fac2ago = factor(fac2ago, levels=c(0,1))) %>%
+  mutate(fac3ago = ifelse(ord3ago>0, 1, ord3ago)) %>%
+  mutate(fac3ago = factor(fac3ago, levels=c(0,1)))
+```
+
+```{r}
+new_csd <- new_csd %>%
+  mutate(recency_fac = ifelse(recency>=5, 5, ifelse(recency>=4.75, 4.75,ifelse(recency>=4.5, 4.5, ifelse(recency>=4.25, 4.25, ifelse(recency>=4, 4, ifelse(recency>=3.75, 3.75,ifelse(recency>=3.5, 3.5, ifelse(recency>=3.25, 3.25, ifelse(recency>3, 3, ifelse(recency>=2.75, 2.75, ifelse(recency>=2.5, 2.5, ifelse(recency>=2.25, 2.25, ifelse(recency>=2, 2, ifelse(recency>=1.75, 1.75, ifelse(recency>=1.5, 1.5, ifelse(recency>=1.25, 1.25, ifelse(recency>=1, 1, ifelse(recency>=0.75, 0.75, ifelse(recency>=0.5, 0.5, ifelse(recency>=0.25, 0.25, 0 ))))))))))))))))))))) %>%
+  mutate(recency_fac = factor(recency_fac))
+```
+
+Make days_on as days since added
+```{r}
+new_csd$days_on <- as.numeric(as.Date('2012/12/1') - new_csd$datead6)
+summary(new_csd$days_on)
+```
+
+
+```{r}
+new_csd
+```
+
+```{r}
+train <- new_csd[new_csd$train == 1,]
+test <- new_csd[new_csd$train == 0,]
+```
+
+## Apply logistic model to predict whether the customer would buy.
+
+Distribution of training and test data
+```{r}
+train$targ_prob <- ifelse(train$targdol > 0, 1, 0)
+test$targ_prob <- ifelse(test$targdol > 0, 1, 0)
+print('training data table:')
+train_baseline <- table(train$targ_prob)
+train_baseline
+print('test data table:')
+test_baseline <- table(test$targ_prob)
+test_baseline
+```
+
+Baseline accuracy:
+```{r}
+print('training data baseline:')
+train_baseline[[1]]/sum(train_baseline)
+print('test data baseline:')
+test_baseline[[1]]/sum(test_baseline)
+```
+
+Utility function: calculate the measures of Correct Classification, based on confusion matrix, including accuracy, precision, recall, and F1_score.
+```{r}
+class_Measure <- function(conf_matrix){
+  accuracy <- sum(diag(conf_matrix))/sum(conf_matrix)
+  precision <- unname(conf_matrix[2,2]/colSums(conf_matrix)[2])
+  recall <- unname(conf_matrix[2,2]/rowSums(conf_matrix)[2])
+  f1_score <- unname(2*precision*recall/(precision+recall))
+  list(Accuracy = accuracy, Precision = precision, Recall = recall, Fscore = f1_score)
+}
+```
+
+Utility function: Scan the threshold for the highest F score by grid search
+```{r}
+search_cutoff <- function(data_resp, data_pred, step=0.01){
+  
+  cutoff <- seq(0, 0.99, step)
+  Fscore_max <- 0
+  F_threshold <- 0
+  Accuracy_max <- 0
+  Acc_threshold <- 0
+  for (prob_thr in cutoff) {
+    prob_pred <- ifelse(data_pred<prob_thr, 0, 1)
+    prob_pred <- factor(prob_pred, levels=c(0,1))
+    conf_matrix <- table(data_resp, prob_pred)
+    pred_perf <- class_Measure(conf_matrix)
+    if (pred_perf$Fscore > Fscore_max) {
+      F_threshold <- prob_thr
+      Fscore_max <- pred_perf$Fscore
+    }
+    if ((pred_perf$Accuracy) > Accuracy_max) {
+      Acc_threshold <- prob_thr
+      Accuracy_max <- pred_perf$Accuracy
+    }
+  }
+  list(MaxFscore = Fscore_max, FsCutoff = F_threshold, MaxAccuracy = Accuracy_max, AccCutoff = Acc_threshold)
+}
+```
+
+
+### Logistic model: consider both consistency and recency
+
+```{r}
+targ_prob_fit <- glm(targ_prob~faclyr+(faclyr:fac2ago)+(faclyr:fac2ago:fac3ago)+slshist+falord+sprord+recency_fac, data=train, family=binomial)
+summary(targ_prob_fit)
+prob_fit_roc <- plot.roc(train$targ_prob, targ_prob_fit$fitted.values, xlim=c(1,0), xlab='1-Specificity')
+prob_fit_roc
+```
+
+### gelman's book
+```{r}
+library(arm)
+```
+
+```{r}
+display(targ_prob_fit)
+```
+
+
+```{r}
+plot(jitter(train$targ_prob, 0.05) ~ jitter(train$slshist))
+curve(invlogit (coef(targ_prob_fit)[1] + coef(targ_prob_fit)['slshist']*x), add=TRUE)
+```
+
+
+```{r}
+plot(jitter(train$targ_prob, 0.05) ~ jitter(train$sprord))
+curve(invlogit (coef(targ_prob_fit)[1] + coef(targ_prob_fit)['sprord']*x), add=TRUE)
+```
+
+#outlier in falord
+```{r}
+plot(jitter(train$targ_prob, 0.05) ~ jitter(train$falord))
+curve(invlogit (coef(targ_prob_fit)[1] + coef(targ_prob_fit)['falord']*x), add=TRUE)
+```
+
+
+### Performance Measure
+```{r}
+print('on training set')
+prob_cutoff <- search_cutoff(train$targ_prob, targ_prob_fit$fitted.values)
+
+print('on test set')
+targ_test_pred <- predict(targ_prob_fit, newdata=test, type='response')
+
+print('Base on the highest Accuracy of training set')
+test_ord <- table(test$targ_prob, targ_test_pred > prob_cutoff$AccCutoff)
+class_Measure(test_ord)
+
+print('Base on the highest F scocre of training set')
+test_ord <- table(test$targ_prob, targ_test_pred > prob_cutoff$FsCutoff)
+class_Measure(test_ord)
+```
+```{r}
+prob_cutoff
+```
+
+
+
+### use avghist (=slshist/(falord+sprord)) instead of slshist
+```{r}
+targ_prob_fit <- glm(targ_prob~faclyr+(faclyr:fac2ago)+(faclyr:fac2ago:fac3ago)+avghist+falord+sprord+recency_fac, data=train, family=binomial)
+summary(targ_prob_fit)
+prob_fit2_roc <- plot.roc(train$targ_prob, targ_prob_fit$fitted.values, xlim=c(1,0), xlab='1-Specificity')
+prob_fit2_roc
+```
+
+```{r}
+print('on training set')
+prob_cutoff <- search_cutoff(train$targ_prob, targ_prob_fit$fitted.values)
+prob_cutoff
+
+print('on test set')
+targ_test_pred <- predict(targ_prob_fit, newdata=test, type='response')
+
+print('Base on the highest Accuracy of training set')
+test_ord <- table(test$targ_prob, targ_test_pred > prob_cutoff$AccCutoff)
+class_Measure(test_ord)
+
+print('Base on the highest F scocre of training set')
+test_ord <- table(test$targ_prob, targ_test_pred > prob_cutoff$FsCutoff)
+class_Measure(test_ord)
+```
+
+
+```{r}
+vif(targ_prob_fit)
+```
+
+
+###Multiple regression on the amount of purchase
+
+```{r}
+#Make days_on as days since added 
+new_csd$days_on <- as.numeric(as.Date('2012/12/1') - new_csd$datead6)
+summary(new_csd$days_on)
+```
+
+
+```{r}
+train_pur <- train %>% filter(targ_prob > 0)
+test_pur <- test %>% filter(targ_prob > 0)
+```
+
+```{r}
+train_pur
+```
+
+use training data set mean to calculate the MSPE baseline
+```{r}
+mspe_fit0 <- sum((test_pur$targdol - mean(train_pur$targdol))^2)/(nrow(test_pur)-1)
+mspe_fit0
+```
+
+```{r}
+train_pur
+```
+
+
+Model 1 by Matt
+```{r}
+pur_fit1 <- lm(targdol ~ log(days_on)  + sqrt(slshist) + ordtyr  + oldOrds + faclyr + fac2ago + fac3ago + avgtyr + avglyr + avg2ago + avg3ago +slstyr:ordtyr, data=train_pur)
+summary(pur_fit1)
+df <- nrow(test_pur) - pur_fit1$rank
+mspe_fit1 <- sum((test_pur$targdol - predict(pur_fit1, newdata=test_pur))^2)/df
+mspe_fit1
+```
+
+
+
+### Step 2: Find Outliers using base model
+```{r}
+base_reg<-pur_fit1
+st_res <- rstandard(base_reg)
+sort(st_res[st_res>2] , decreasing = TRUE)[1:25]
+length(sort(st_res[st_res>2] , decreasing = TRUE))
+```
+
+### Step 3: Find Cooks Distance using base model
+```{r}
+d_cut <- 4/(length(train_pur$targdol)-length(base_reg)-1)
+cd <- cooks.distance(base_reg)
+sort(cd[cd>d_cut] , decreasing = TRUE)[1:25]
+length(cd[cd>d_cut])
+```
+
+#### Step 4: Remove Ouliers and Influential Points from dataframe
+```{r}
+train_lm.1 <- train_pur
+train_lm.1$st_res <- rstandard(base_reg)
+train_lm.1$cd <- cooks.distance(base_reg)
+train_lm.1 <- train_lm.1[(train_lm.1$st_res < 2 & train_lm.1$cd < d_cut),]
+```
+
+#### Step 5: Re-evaluate Model with cleaned dataframe
+```{r}
+clean_reg <- update(base_reg, . ~ .  
+           
+                    , data = train_lm.1)
+summary(clean_reg)
+```
+
+####Step 6: FIND MSPE
+```{r}
+r <- (test_pur$targdol)
+p <- (predict(clean_reg,newdata=test_pur))
+sum((r-p)^2)/(length(test_pur$targdol - length(clean_reg) -1))
+```
+
+#calculate the financial outcome
+
+```{r}
+test$targ_exp <- predict(clean_reg,newdata=test) * predict(targ_prob_fit, newdata=test, type='response')
+```
+
+```{r}
+test
+```
+
+```{r}
+top1000 <- test$targdol[order(test$targ_exp, decreasing = TRUE)[1:1000]]
+sum(top1000)
+```
+

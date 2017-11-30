@@ -11,6 +11,7 @@ knitr::opts_chunk$set(echo = TRUE)
 
 ```{r}
 library(tidyverse)
+library(glmnet)
 ```
 
 
@@ -34,7 +35,7 @@ csd[is.na(csd$lpuryear) == FALSE & substr(csd$datelp6,4,4) < csd$lpuryear & as.n
   mutate(datelp6 = as.Date(paste0(substr(datelp6,1,3), lpuryear,"-06-30")))
 
 #Drop lpuryear
-#csd <- subset(csd, select = -c(lpuryear))
+csd <- subset(csd, select = -c(lpuryear))
 ```
 
 ```{r}
@@ -42,9 +43,49 @@ csd[is.na(csd$lpuryear) == FALSE & substr(csd$datelp6,4,4) < csd$lpuryear & as.n
 new_csd <- csd %>%
   mutate(oldOrds = sprord + falord - (ordtyr + ordlyr + ord2ago + ord3ago)) %>%
   mutate(oldSales = slshist - (slstyr + slslyr + sls2ago + sls3ago)) %>%
-  #filter(!((as.integer(substr(datelp6,1,4)) - 3 <= as.integer(substr(datead6,1,4))) & (oldOrds != 0) & (oldSales !=0))) %>%
   mutate(oldOrds = ifelse(oldOrds < 0, 0, oldOrds))
+
+
+new_csd <- new_csd %>%
+  mutate(days = (2012-as.integer(substr(datelp6,1,4)))*12*30 + (12 - as.integer(substr(datelp6,6,7)))*30 + (1-as.integer(substr(datelp6,9,10)))) %>%
+  mutate(recency = days/365)
+
+
+new_csd <- new_csd %>%
+  mutate(factyr = ifelse(slstyr>0, 1, 0)) %>%
+  mutate(faclyr = ifelse(slslyr>0, 1, 0)) %>%
+  mutate(fac2ago = ifelse(sls2ago>0, 1, 0)) %>%
+  mutate(fac3ago = ifelse(sls3ago>0, 1, 0))
 ```
+
+```{r}
+new_csd <- new_csd %>%
+  mutate(avgtyr = ifelse(ordtyr>0, slstyr/ordtyr, 0)) %>%
+  mutate(avglyr = ifelse(ordlyr>0, slslyr/ordlyr, 0)) %>%
+  mutate(avg2ago = ifelse(ord2ago>0, sls2ago/ord2ago, 0)) %>%
+  mutate(avg3ago = ifelse(ord3ago>0, sls3ago/ord3ago, 0)) %>%
+  mutate(avghist = ifelse((falord+sprord)>0, slshist/(falord+sprord), 0))
+```
+
+
+new_csd <- new_csd %>%
+  mutate(targ_prob = ifelse(targdol > 0, 1, 0)) %>%
+  mutate(factyr = ifelse(ordtyr>0, 1, ordtyr)) %>%
+  mutate(factyr = factor(factyr, levels=c(0,1))) %>%
+  mutate(faclyr = ifelse(ordlyr>0, 1, ordlyr)) %>%
+  mutate(faclyr = factor(faclyr, levels=c(0,1))) %>%
+  mutate(fac2ago = ifelse(ord2ago>0, 1, ord2ago)) %>%
+  mutate(fac2ago = factor(fac2ago, levels=c(0,1))) %>%
+  mutate(fac3ago = ifelse(ord3ago>0, 1, ord3ago)) %>%
+  mutate(fac3ago = factor(fac3ago, levels=c(0,1)))
+```
+
+
+new_csd <- new_csd %>%
+  mutate(recency_fac = ifelse(recency>=5, 5, ifelse(recency>=4.75, 4.75,ifelse(recency>=4.5, 4.5, ifelse(recency>=4.25, 4.25, ifelse(recency>=4, 4, ifelse(recency>=3.75, 3.75,ifelse(recency>=3.5, 3.5, ifelse(recency>=3.25, 3.25, ifelse(recency>3, 3, ifelse(recency>=2.75, 2.75, ifelse(recency>=2.5, 2.5, ifelse(recency>=2.25, 2.25, ifelse(recency>=2, 2, ifelse(recency>=1.75, 1.75, ifelse(recency>=1.5, 1.5, ifelse(recency>=1.25, 1.25, ifelse(recency>=1, 1, ifelse(recency>=0.75, 0.75, ifelse(recency>=0.5, 0.5, ifelse(recency>=0.25, 0.25, 0 ))))))))))))))))))))) %>%
+  mutate(recency_fac = factor(recency_fac))
+```
+
 
 Make purchase variable, and split out training model for linear models
 ```{r}
@@ -53,12 +94,14 @@ Make purchase variable, and split out training model for linear models
 train <- new_csd[new_csd$train == 1,]
 test <- new_csd[new_csd$train == 0,]
 
-train_lm <- new_csd[new_csd$targdol > 0,]
-
+#Create Linear Model training set
+train_lm <- train[train$targdol > 0,]
+train_lm <- na.exclude(train_lm)
+test_lm <- test[test$targdol > 0,]
 
 ```
 
-
+Build all the linear models
 ```{r}
 lm.1 <- lm(targdol~datead6, data= train_lm)
 lm.2 <- lm(targdol~datelp6, data= train_lm)
@@ -110,13 +153,13 @@ plot(lm.16 , which = 1:2)
 
 Since most of the QQ plots don't look very linear, lets log(targdol) and see the results:
 ```{r}
-train_lm$targdol_l <- log(train_lm$targdol)
-lm.1_l <- lm(targdol_l~datead6, data= train_lm)
-lm.2_l <- lm(targdol_l~datelp6, data= train_lm)
-lm.3_l<- lm(targdol_l~slstyr, data= train_lm)
-lm.4_l <- lm(targdol_l~slslyr, data= train_lm)
-lm.5_l <- lm(targdol_l~sls2ago, data= train_lm)
-lm.6_l <- lm(targdol_l~sls3ago, data= train_lm)
+#train_lm$targdol_l <- log(train_lm$targdol)
+lm.1_l <- lm(log(targdol)~datead6, data= train_lm)
+lm.2_l <- lm(log(targdol)~datelp6, data= train_lm)
+lm.3_l<- lm(log(targdol)~slstyr, data= train_lm)
+lm.4_l <- lm(log(targdol)~slslyr, data= train_lm)
+lm.5_l <- lm(log(targdol)~sls2ago, data= train_lm)
+lm.6_l <- lm(log(targdol)~sls3ago, data= train_lm)
 
 ```
 
@@ -141,10 +184,133 @@ plot(lm.5_l, which= 1:2)
 It looks like logging the response variable will improve our normality assumption accross the board. Also, logging sales data is not uncommon in industry. 
 
 ```{r}
-fit_1 <- lm(targdol_l~ . -targdol -lpuryear -train -falord -sprord -oldSales , data=train_lm)
+fit_1 <- lm(log(targdol)~ . -train -falord -sprord -oldSales , data=train_lm)
 summary(fit_1)
 ```
 
 ```{r}
+fit_2 <- step(fit_1)
+summary(fit_2)
 ```
+
+
+Check Cooks Distance:
+```{r}
+d_cut <- 4/(length(train_lm$targdol)-length(fit_2)-1)
+cd <- cooks.distance(fit_2)
+sort(cd[cd>d_cut] , decreasing = TRUE)[1:25]
+length(cd[cd>d_cut])
+
+```
+
+Check for outliers:
+```{r}
+st_res <- rstandard(fit_2)
+sort(st_res[st_res>2] , decreasing = TRUE)[1:25]
+length(sort(st_res[st_res>2] , decreasing = TRUE))
+```
+
+```{r}
+train_lm.1 <- train_lm
+train_lm.1$st_res <- rstandard(fit_2)
+train_lm.1$cd <- cooks.distance(fit_2)
+train_lm.2 <- train_lm.1[(train_lm.1$st_res < 2 & train_lm.1$cd < d_cut),]
+#train_lm.2 <- train_lm.2[train_lm.2$cd < 0.003646954]
+```
+
+```{r}
+fit_3 <- lm(log(targdol)~ . -targdol -train -falord -sprord -oldSales -cd -st_res , data=train_lm.2)
+fin_fit <- (step(fit_3))
+summary(fin_fit)
+length(fin_fit)
+```
+
+
+MSPE
+```{r}
+#exp(predict(fin_fit, newdata = test))^2
+r <- (test_lm$targdol)
+p <- exp(predict(fin_fit,newdata=test_lm))
+sum((r-p)^2)/(length(test_lm$targdol - length(fin_fit) -1))
+```
+
+```{r}
+fit1 <- step(lm(targdol~. , data=train_lm),trace=0)
+summary(fit1)
+```
+
+
+
+
+
+---------------------------------------------------------------------
+###Linear Regression Model Specification
+Assumptions: We have a cleaned train and test data set with targdol >0 (train_lm)
+
+
+#### Step 0: Test out base models
+```{r}
+y <- train_lm$targdol
+x=model.matrix(y~( datead6*slstyr*sls3ago*slshist*ordtyr*ord2ago*oldOrds*faclyr*fac2ago*fac3ago*avgtyr*avglyr*avg2ago*avg3ago),train_lm)
+
+lassofit=glmnet(x, y, alpha=1,lambda=seq(0,10,0.01))
+lassocv=cv.glmnet(x,y,alpha=1,nfold=3,lambda=seq(0,10,0.01))
+lambdalasso=lassocv$lambda.min
+#print(lambdalasso)
+small.lambda.index <- which(lassocv$lambda == lassocv$lambda.min)
+small.lambda.betas <- coef(lassocv$glmnet.fit)[,small.lambda.index]
+#print(small.lambda.betas)
+small.lambda.betas == 0
+```
+
+```{r}
+newvars <- small.lambda.betas[small.lambda.betas!=0]
+names(newvars)
+```
+
+
+
+#### Step 1: Choose your base model
+```{r}
+base_reg <- lm((targdol)~ datead6 + datelp6 + slstyr+slslyr+sls2ago +slshist + ordhist ,data=train_lm)
+summary(base_reg)
+
+```
+
+### Step 2: Find Outliers using base model
+```{r}
+st_res <- rstandard(base_reg)
+sort(st_res[st_res>2] , decreasing = TRUE)[1:25]
+length(sort(st_res[st_res>2] , decreasing = TRUE))
+```
+
+### Step 3: Find Cooks Distance using base model
+```{r}
+d_cut <- 4/(length(train_lm$targdol)-length(base_reg)-1)
+cd <- cooks.distance(base_reg)
+sort(cd[cd>d_cut] , decreasing = TRUE)[1:25]
+length(cd[cd>d_cut])
+```
+
+#### Step 4: Remove Ouliers and Influential Points from dataframe
+```{r}
+train_lm.1 <- train_lm
+train_lm.1$st_res <- rstandard(base_reg)
+train_lm.1$cd <- cooks.distance(base_reg)
+train_lm.1 <- train_lm.1[(train_lm.1$st_res < 2 & train_lm.1$cd < d_cut),]
+```
+
+#### Step 5: Re-evaluate Model with cleaned dataframe
+```{r}
+clean_reg <- update(base_reg, . ~ ., data = train_lm.1)
+summary(clean_reg)
+```
+
+####Step 6: FIND MSPE
+```{r}
+r <- (test_lm$targdol)
+p <- (predict(clean_reg,newdata=test_lm))
+sum((r-p)^2)/(length(test_lm$targdol - length(clean_reg) -1))
+```
+
 
